@@ -87,7 +87,7 @@ def preference_loss(policy_chosen_logps: torch.FloatTensor,
     return losses, chosen_rewards, rejected_rewards
 
 
-def _get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, average_log_prob: bool = False) -> torch.FloatTensor:
+def _get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, average_log_prob: bool = False, len_chosen: int = None) -> torch.FloatTensor:
     """Compute the log probabilities of the given labels under the given logits.
 
     Args:
@@ -108,6 +108,13 @@ def _get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, averag
     labels[labels == -100] = 0
 
     per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+    if len_chosen is not None:
+        per_token_minus_log_one_minus_probs = -torch.log(torch.clamp((1.0 - per_token_logps.exp()), min=1e-20))
+        assert per_token_logps.size(0) % 2 == 0  # first half are chosen, second half are rejected
+        #len_chosen = per_token_logps.size(0) // 2
+        per_token_logps[len_chosen:] = per_token_minus_log_one_minus_probs[len_chosen:]
+
 
     if average_log_prob:
         return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
@@ -214,7 +221,7 @@ class BasicTrainer(object):
         """
         concatenated_batch = concatenated_inputs(batch)
         all_logits = model(concatenated_batch['concatenated_input_ids'], attention_mask=concatenated_batch['concatenated_attention_mask']).logits.to(torch.float32)
-        all_logps = _get_batch_logps(all_logits, concatenated_batch['concatenated_labels'], average_log_prob=False)
+        all_logps = _get_batch_logps(all_logits, concatenated_batch['concatenated_labels'], average_log_prob=False, len_chosen=batch['chosen_input_ids'].shape[0])
         chosen_logps = all_logps[:batch['chosen_input_ids'].shape[0]]
         rejected_logps = all_logps[batch['chosen_input_ids'].shape[0]:]
         return chosen_logps, rejected_logps
